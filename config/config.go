@@ -67,6 +67,7 @@ type HeplifyServer struct {
 	DBPercentageUsage     string   `default:"80%"`
 	DBMaxSize             string   `default:"20GB"`
 	DBProcDropLimit       int      `default:"2"`
+	DBUsageCheck          string   `default:"*/10 * * * *"`
 	Dedup                 bool     `default:"false"`
 	DiscardMethod         []string `default:""`
 	CensorMethod          []string `default:""`

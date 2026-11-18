@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -48,6 +49,8 @@ type Rotator struct {
 	percentageUsage  string
 	maxDBSize        string
 	dropLimit        int
+	usageCheck       string
+	usageMu          sync.Mutex
 	createJob        *cron.Cron
 	dropJob          *cron.Cron
 }
@@ -71,6 +74,7 @@ func Setup(quit chan bool) *Rotator {
 		percentageUsage: config.Setting.DBPercentageUsage,
 		maxDBSize:       config.Setting.DBMaxSize,
 		dropLimit:       config.Setting.DBProcDropLimit,
+		usageCheck:      config.Setting.DBUsageCheck,
 		createJob:       cron.New(),
 		dropJob:         cron.New(),
 	}
@@ -234,6 +238,11 @@ func (r *Rotator) GetDatabaseSize(db *sql.DB, schema string) (float64, error) {
 }
 
 func (r *Rotator) UsageProtection(scheme string) error {
+	if !r.usageMu.TryLock() {
+		logp.Info("disk space usage job already running\n")
+		return nil
+	}
+	defer r.usageMu.Unlock()
 
 	db, err := sql.Open(r.driver, r.dataDBAddr)
 	defer db.Close()
@@ -268,13 +277,18 @@ func (r *Rotator) UsageProtection(scheme string) error {
 		}
 	}
 	for curSize > configuredSize {
-		r.dbExecDropTablesForFreeSpace(db, selectlogpg, droplogpg, r.dropDays)
-		r.dbExecDropTablesForFreeSpace(db, selectisuppg, dropisuppg, r.dropDays)
-		r.dbExecDropTablesForFreeSpace(db, selectreportpg, dropreportpg, r.dropDays)
-		r.dbExecDropTablesForFreeSpace(db, selectrtcppg, droprtcppg, r.dropDays)
-		r.dbExecDropTablesForFreeSpace(db, selectcallpg, dropcallpg, r.dropLimit)
-		r.dbExecDropTablesForFreeSpace(db, selectregisterpg, dropregisterpg, r.dropDaysRegister)
-		r.dbExecDropTablesForFreeSpace(db, selectdefaultpg, dropdefaultpg, r.dropDaysDefault)
+		dropped := 0
+		dropped += r.dbExecDropTablesForFreeSpace(db, selectlogpg, droplogpg, r.partLog, r.dropLimit)
+		dropped += r.dbExecDropTablesForFreeSpace(db, selectisuppg, dropisuppg, r.partIsup, r.dropLimit)
+		dropped += r.dbExecDropTablesForFreeSpace(db, selectreportpg, dropreportpg, r.partQos, r.dropLimit)
+		dropped += r.dbExecDropTablesForFreeSpace(db, selectrtcppg, droprtcppg, r.partQos, r.dropLimit)
+		dropped += r.dbExecDropTablesForFreeSpace(db, selectcallpg, dropcallpg, r.partSip, r.dropLimit)
+		dropped += r.dbExecDropTablesForFreeSpace(db, selectregisterpg, dropregisterpg, r.partSip, r.dropLimit)
+		dropped += r.dbExecDropTablesForFreeSpace(db, selectdefaultpg, dropdefaultpg, r.partSip, r.dropLimit)
+		if dropped == 0 {
+			logp.Warn("usage protection: size %.0f is above %.0f but no closed partition can be dropped\n", curSize, configuredSize)
+			break
+		}
 		curSize, err = r.GetDatabaseSize(db, scheme)
 		if err != nil {
 			logp.Err("%v", err)
@@ -364,11 +378,25 @@ func (r *Rotator) dbExecDropTables(db *sql.DB, listfile, dropfile string, d int)
 	return nil
 }
 
-func (r *Rotator) dbExecDropTablesForFreeSpace(db *sql.DB, listfile, dropfile string, droplimit int) error {
-	t := time.Now()
-	t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
-	partDate := t.Format("20060102")
-	partTime := t.Format("1504")
+// closedPartitionCutoff is the name-suffix of the partition that is still receiving
+// writes. Free-space cleanup deletes only names strictly older than this, so the
+// open interval stays in place and inserts keep finding a partition.
+func closedPartitionCutoff(now time.Time, stepMin int) (string, string) {
+	if stepMin <= 0 {
+		stepMin = 60
+	}
+	step := time.Duration(stepMin) * time.Minute
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	elapsed := now.Sub(midnight)
+	start := midnight.Add(elapsed - elapsed%step)
+	return start.Format("20060102"), start.Format("1504")
+}
+
+func (r *Rotator) dbExecDropTablesForFreeSpace(db *sql.DB, listfile, dropfile string, stepMin, droplimit int) int {
+	if droplimit <= 0 {
+		droplimit = 2
+	}
+	partDate, partTime := closedPartitionCutoff(time.Now(), stepMin)
 	listquery := strings.Replace(listfile, partitionDate, partDate, -1)
 	listquery = strings.Replace(listquery, partitionTime, partTime, -1)
 	var partName string
@@ -376,35 +404,38 @@ func (r *Rotator) dbExecDropTablesForFreeSpace(db *sql.DB, listfile, dropfile st
 	rows, err := db.Query(listquery)
 	if err != nil {
 		logp.Err("%v", err)
-		return err
+		return 0
 	}
 	defer rows.Close()
 
-	i := 1
+	dropped := 0
+	attempted := 0
 	for rows.Next() {
 		err := rows.Scan(&partName)
 		if err != nil {
 			logp.Err("%v", err)
-			return err
+			return dropped
 		}
 		dropquery := strings.Replace(dropfile, partitionName, partName, -1)
 
 		logp.Debug("rotator", "db query:\n%s\n\n", dropquery)
-		_, err = db.Exec(dropquery)
-		checkDBErr(err)
-		if i >= droplimit {
+		if _, err = db.Exec(dropquery); err != nil {
+			checkDBErr(err)
+		} else {
+			dropped++
+			logp.Info("usage protection dropped %s\n", partName)
+		}
+		attempted++
+		if attempted >= droplimit {
 			break
 		}
-		i++
 	}
 
-	err = rows.Err()
-	if err != nil {
+	if err = rows.Err(); err != nil {
 		logp.Err("%v", err)
-		return err
 	}
 
-	return nil
+	return dropped
 }
 
 func (r *Rotator) dbExec(db *sql.DB, query string) {
@@ -491,32 +522,26 @@ func (r *Rotator) Rotate() {
 		logp.Err("%v", err)
 	}
 	if r.usageProtection {
-		switch r.usageScheme {
-		case "maxusage":
-			_, err = r.createJob.AddFunc("30 04 * * *", func() {
-				logp.Info("run disk space usage job\n")
-				if err := r.UsageProtection("maxusage"); err != nil {
-					logp.Err("%v", err)
-				}
-			})
-			if err != nil {
+		scheme := "percentage"
+		if r.usageScheme == "maxusage" {
+			scheme = "maxusage"
+		} else if err = r.createPCFunc(); err != nil {
+			logp.Err("%v", err)
+		}
+		spec := r.usageCheck
+		if spec == "" {
+			spec = "*/10 * * * *"
+		}
+		_, err = r.createJob.AddFunc(spec, func() {
+			logp.Info("run disk space usage job\n")
+			if err := r.UsageProtection(scheme); err != nil {
 				logp.Err("%v", err)
 			}
-		default:
-			err := r.createPCFunc()
-			if err != nil {
-				logp.Err("%v", err)
-			} else {
-				_, err = r.createJob.AddFunc("45 04 * * *", func() {
-					logp.Info("run disk space usage job\n")
-					if err := r.UsageProtection("percentage"); err != nil {
-						logp.Err("%v", err)
-					}
-				})
-				if err != nil {
-					logp.Err("%v", err)
-				}
-			}
+		})
+		if err != nil {
+			logp.Err("disk space usage check %q: %v", spec, err)
+		} else {
+			logp.Info("schedule disk space usage job at %s\n", spec)
 		}
 	}
 	r.createJob.Start()

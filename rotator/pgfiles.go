@@ -1,13 +1,13 @@
 package rotator
 
 var (
-	selectlogpg      = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_100_default_%' and tablename < 'hep_proto_100_default_{{date}}_{{time}}';"
-	selectreportpg   = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_35_default_%' and tablename < 'hep_proto_35_default_{{date}}_{{time}}';"
-	selectisuppg     = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_54_default_%' and tablename < 'hep_proto_54_default_{{date}}_{{time}}';"
-	selectrtcppg     = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_5_default_%' and tablename < 'hep_proto_5_default_{{date}}_{{time}}';"
-	selectcallpg     = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_1_call_%' and tablename < 'hep_proto_1_call_{{date}}_{{time}}';"
-	selectregisterpg = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_1_registration_%' and tablename < 'hep_proto_1_registration_{{date}}_{{time}}';"
-	selectdefaultpg  = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_1_default_%' and tablename < 'hep_proto_1_default_{{date}}_{{time}}';"
+	selectlogpg      = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_100_default_%' and tablename < 'hep_proto_100_default_{{date}}_{{time}}' ORDER BY tablename;"
+	selectreportpg   = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_35_default_%' and tablename < 'hep_proto_35_default_{{date}}_{{time}}' ORDER BY tablename;"
+	selectisuppg     = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_54_default_%' and tablename < 'hep_proto_54_default_{{date}}_{{time}}' ORDER BY tablename;"
+	selectrtcppg     = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_5_default_%' and tablename < 'hep_proto_5_default_{{date}}_{{time}}' ORDER BY tablename;"
+	selectcallpg     = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_1_call_%' and tablename < 'hep_proto_1_call_{{date}}_{{time}}' ORDER BY tablename;"
+	selectregisterpg = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_1_registration_%' and tablename < 'hep_proto_1_registration_{{date}}_{{time}}' ORDER BY tablename;"
+	selectdefaultpg  = "SELECT tablename FROM pg_tables WHERE tablename LIKE 'hep_proto_1_default_%' and tablename < 'hep_proto_1_default_{{date}}_{{time}}' ORDER BY tablename;"
 )
 
 var (

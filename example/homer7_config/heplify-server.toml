@@ -44,6 +44,7 @@ DBUsageProtection     = true
 DBUsageScheme         = "percentage"
 DBPercentageUsage     = "80%"
 DBMaxSize             = "30MB"
+DBUsageCheck          = "*/10 * * * *"
 Dedup                 = false
 DiscardMethod         = []
 AlegIDs               = []
